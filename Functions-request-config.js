@@ -27,7 +27,7 @@ const requestConfig = {
   // location of source code (only Inline is currently supported)
   codeLocation: Location.Inline,
   // location of secrets (Inline or Remote)
-  secretsLocation: Location.Inline,
+  secretsLocation: Location.Remote,
   // code language (only JavaScript is currently supported)
   codeLanguage: CodeLanguage.JavaScript,
   // string containing the source code to be executed
@@ -48,9 +48,14 @@ const requestConfig = {
   // expected type of the returned value
   expectedReturnType: ReturnType.uint256,
   // Redundant URLs which point to encrypted off-chain secrets
-  secretsURLs: [],
+  secretsURLs: ["https://secrets.royhooroyhoo.repl.co/offchain-secrets"],
   // Default offchain secrets object used by the `functions-build-offchain-secrets` command
-  globalOffchainSecrets: {},
+  globalOffchainSecrets: { 
+    openWeatherApiKey: process.env.OPEN_WEATHER_API_KEY,
+    worldWeatherApiKey: process.env.WORLD_WEATHER_API_KEY,
+    ambeeWeatherApiKey: process.env.AMBEE_DATA_API_KEY,
+    clientAddress: process.env.CLIENT_ADDR
+  },
   // Per-node offchain secrets objects used by the `functions-build-offchain-secrets` command
   perNodeOffchainSecrets: [],
 }
