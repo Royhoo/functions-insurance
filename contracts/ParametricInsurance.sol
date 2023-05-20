@@ -19,13 +19,13 @@ contract ParametricInsurance is FunctionsClient {
     uint256 public constant INSURANCE_DAYS = 3;
 
     // The date begin check temperature
-    uint256 public constant BEGIN_EXECUTE_REQUEST_DAY = 10;
+    uint256 public constant BEGIN_EXECUTE_REQUEST_DAY = 11;
 
     // Deadline you can purchase of insurance or capital injection. Must be earlier than BEGIN_EXECUTE_REQUEST_DAY
-    uint256 public constant INSURE_DEADLINE = 5;
+    uint256 public constant INSURE_DEADLINE = 10;
 
-    // Number of seconds in a day. 60 for testing, 86400 for Production
-    uint256 public constant DAY_IN_SECONDS = 60; 
+    // Number of seconds in a day. 600 for testing, 86400 for Production
+    uint256 public constant DAY_IN_SECONDS = 600; 
     
     // Check if the contract active or end
     bool public contractActive;

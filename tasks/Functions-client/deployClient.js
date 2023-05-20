@@ -20,7 +20,7 @@ task("functions-deploy-client", "Deploys the ParametricInsurance contract")
 
     const clientContractFactory = await ethers.getContractFactory("ParametricInsurance")
 
-    const clientContract = await clientContractFactory.deploy(oracleAddress, requestConfig.secrets.clientAddress)
+    const clientContract = await clientContractFactory.deploy(oracleAddress)
 
     console.log(
       `\nWaiting ${VERIFICATION_BLOCK_CONFIRMATIONS} blocks for transaction ${clientContract.deployTransaction.hash} to be confirmed...`
@@ -35,7 +35,7 @@ task("functions-deploy-client", "Deploys the ParametricInsurance contract")
         await clientContract.deployTransaction.wait(Math.max(6 - VERIFICATION_BLOCK_CONFIRMATIONS, 0))
         await run("verify:verify", {
           address: clientContract.address,
-          constructorArguments: [oracleAddress, requestConfig.secrets.clientAddress],
+          constructorArguments: [oracleAddress],
         })
         console.log("Contract verified")
       } catch (error) {
