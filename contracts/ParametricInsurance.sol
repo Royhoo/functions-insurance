@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.7;
 
+import "hardhat/console.sol";
 import "./dev/functions/FunctionsClient.sol";
 
 contract ParametricInsurance is FunctionsClient {
@@ -11,16 +12,20 @@ contract ParametricInsurance is FunctionsClient {
     bytes public latestError;
     event OCRResponse(bytes32 indexed requestId, bytes result, bytes err);
 
-    // Number of consecutive days with temperature below threshold
-    uint256 public constant COLD_DAYS_THRESHOLD = 3;
+    // Number of days with temperature below threshold
+    uint256 public constant COLD_DAYS_THRESHOLD = 2;
+
+    // Number of insurance days to check temperature
+    uint256 public constant INSURANCE_DAYS = 3;
+
+    // The date begin check temperature
+    uint256 public constant BEGIN_EXECUTE_REQUEST_DAY = 10;
+
+    // Deadline you can purchase of insurance or capital injection. Must be earlier than BEGIN_EXECUTE_REQUEST_DAY
+    uint256 public constant INSURE_DEADLINE = 5;
 
     // Number of seconds in a day. 60 for testing, 86400 for Production
     uint256 public constant DAY_IN_SECONDS = 60; 
-
-    address public insurer;
-
-    // address of client is immutable and can only be assigned in constructor
-    address public immutable client;
     
     // Check if the contract active or end
     bool public contractActive;
@@ -31,19 +36,37 @@ contract ParametricInsurance is FunctionsClient {
     // how many days with cold weather in a row
     uint256 public consecutiveColdDays = 0;
 
+    // how many days checked
+    uint256 public checkedDays = 0;
+
     // the temperature below threshold is considered as cold(in Fahrenheit)
     uint256 public coldTemp = 60;
     
     // current temperature for the location
     uint256 public currentTemperature;
     
-    //when the last temperature check was performed
+    // when the last temperature check was performed
     uint256 public currentTempDateChecked;
 
-    constructor(address oracle, address _client) FunctionsClient(oracle) payable {
-        insurer = msg.sender;
-        client = _client;
+    // deploy timestamp
+    uint256 public deployTimestamp;
+
+    // Mapping to keep track of insurers and their capital
+    mapping(address => uint256) public insurers;
+
+    // Mapping to keep track of policyholders and their premium
+    mapping(address => uint256) public policyholders;
+
+    uint256 public totalInsurerCapital;
+
+    uint256 public totalPolicyholdersPremium;
+
+    // Insurance payout ratio, must meet: totalInsurerCapital >= (odds - 1) * totalPolicyholdersPremium
+    uint256 public odds = 2;
+
+    constructor(address oracle) FunctionsClient(oracle) payable {
         shouldPayClient = false;
+        deployTimestamp = block.timestamp;
         currentTempDateChecked = block.timestamp;
         contractActive = true;
         currentTemperature = 0;
@@ -53,7 +76,8 @@ contract ParametricInsurance is FunctionsClient {
      * @dev Prevents a data request to be called unless it's been a day since the last call (to avoid spamming and spoofing results)
      */
     modifier callFrequencyOncePerDay() {
-        require((block.timestamp- currentTempDateChecked) > DAY_IN_SECONDS,'Can only check temperature once per day');
+        require((block.timestamp- currentTempDateChecked) > DAY_IN_SECONDS,
+                'Can only check temperature once per day');
         _;
     }
 
@@ -61,8 +85,58 @@ contract ParametricInsurance is FunctionsClient {
      * @dev Prevents a function being run unless contract is still active
      */
     modifier onContractActive() {
-        require(contractActive == true ,'Contract has ended, cant interact with it anymore');
+        require(contractActive == true ,
+                'Contract has ended, cant interact with it anymore unless draw');
         _;
+    }
+
+    /**
+     * @dev Prevents draw unless meet the condition
+     */
+    modifier beginDraw() {
+        require(contractActive == false, 'Cant draw now, please wait!');
+        _;
+    }
+
+    /**
+     * @dev Prevents a function being run unless the time has come
+     */
+    modifier beginExecuteRequest() {
+        require((block.timestamp - deployTimestamp) > DAY_IN_SECONDS * BEGIN_EXECUTE_REQUEST_DAY
+                ,'Cant execute request now, please wait!');
+        _;
+    }
+
+    /**
+     * @dev Can only purchase of insurance or capital injection before deadline
+     */
+    modifier beforeInsureDeadline() {
+        require((block.timestamp - deployTimestamp) < DAY_IN_SECONDS * INSURE_DEADLINE
+                ,'Deadline arrives, cant purchase or injection!');
+        _;
+    }
+
+    /**
+     * @notice Insurer injection capital
+     */
+    function capitalInjection() beforeInsureDeadline() public payable {
+        insurers[msg.sender] = insurers[msg.sender] + msg.value;
+        totalInsurerCapital += msg.value;
+
+        console.log("capitalInjection msg.sender=%s insurers[msg.sender]=%d", msg.sender, insurers[msg.sender]);
+    }
+
+    /**
+     * @notice Purchase of insurance
+     */
+    function purchaseInsurance() beforeInsureDeadline() public payable {
+        require(totalInsurerCapital >= (odds - 1) * (totalPolicyholdersPremium + msg.value),
+                "The compensation fund is insufficient");
+    
+        policyholders[msg.sender] = policyholders[msg.sender] + msg.value;
+        totalPolicyholdersPremium += msg.value;
+
+        console.log("purchaseInsurance msg.sender=%s policyholders[msg.sender]=%d", msg.sender, policyholders[msg.sender]);
     }
 
     /**
@@ -79,7 +153,7 @@ contract ParametricInsurance is FunctionsClient {
         string[] calldata args,
         uint64 subscriptionId,
         uint32 gasLimit
-    ) public callFrequencyOncePerDay() onContractActive() returns (bytes32) {
+    ) public callFrequencyOncePerDay() onContractActive() beginExecuteRequest() returns (bytes32) {
         Functions.Request memory req;
         req.initializeRequest(Functions.Location.Inline, Functions.CodeLanguage.JavaScript, source);
         if (secrets.length > 0) {
@@ -122,21 +196,57 @@ contract ParametricInsurance is FunctionsClient {
       } else {
           consecutiveColdDays += 1;
       }
+      checkedDays++;
 
-      // pay the client and shut down the contract
-      if(consecutiveColdDays >= COLD_DAYS_THRESHOLD) {
-          payoutContract();
+      if(consecutiveColdDays >= COLD_DAYS_THRESHOLD || checkedDays >= INSURANCE_DAYS) {
+          if(consecutiveColdDays >= COLD_DAYS_THRESHOLD) {
+            shouldPayClient = true;
+          }
+
+          contractActive = false;
       }
     }
 
     /**
-     * @dev Insurance conditions have been met, do payout of total cover amount to client
+     * @notice draw capital,if there is money left
      */
-    function payoutContract() onContractActive() internal {
-      (bool sent, /*bytes memory data*/) = client.call{value: address(this).balance}("");
-      contractActive = !sent;
-      shouldPayClient = sent;
+    function capitalDraw() beginDraw() public {
+        require(insurers[msg.sender] > 0, "There is nothing to draw!");
+        uint256 residue = 0;
+        if(shouldPayClient) {
+            residue = totalInsurerCapital - totalPolicyholdersPremium * odds;
+        } else{
+            residue = totalInsurerCapital + totalPolicyholdersPremium;
+        }
+
+        require(residue > 0, "There is nothing to draw!");
+        uint256 drawAmt = (insurers[msg.sender] * residue) / totalInsurerCapital;
+        if(drawAmt > address(this).balance){
+            drawAmt = address(this).balance;
+        }
+        (bool sent, /*bytes memory data*/) = payable(msg.sender).call{value: drawAmt}("");
+        require(sent, "Failure! Please try again!");
+        insurers[msg.sender] = 0;
+        console.log("capitalDraw msg.sender=%s drawAmt=%d", msg.sender, drawAmt);
     }
+
+    /**
+     * @notice Clint draw if it's should pay 
+     */
+    function clintDraw() beginDraw() public {
+        require(shouldPayClient && policyholders[msg.sender] > 0, "There is nothing to draw!");
+        uint256 drawAmt = policyholders[msg.sender] * odds;
+        (bool sent, /*bytes memory data*/) = payable(msg.sender).call{value: drawAmt}("");
+        require(sent, "Failure! Please try again!");
+        policyholders[msg.sender] = 0;
+        console.log("clintDraw msg.sender=%s drawAmt=%d", msg.sender, drawAmt);
+    }
+
+    // local test
+    /*function mockFulfill() public {
+        shouldPayClient = true;
+        contractActive = false;
+    }*/
 
     /**
      * @dev Receive function so contract can receive ether when required
